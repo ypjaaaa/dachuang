@@ -1,0 +1,14 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.log
+*_log.txt
+llm_debug.txt
+.env
+*.db
+data/
+*.pptx
+:memory:.ses
+meeting-ai-master/
+models/

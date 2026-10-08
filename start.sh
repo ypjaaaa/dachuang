@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# 启动会议知识库界面(本地 RAG)
+# 说明:本机设有 socks 代理(all_proxy=ALL_PROXY=socks://127.0.0.1:7897),
+#       Gradio 依赖的 httpx 不认识 socks:// 协议会在 import 时崩溃,
+#       故启动前先清空这些代理变量(本应用全本地运行,不需要代理)。
+set -e
+cd "$(dirname "$0")"
+
+# 清掉会干扰 httpx 的代理变量
+unset all_proxy ALL_PROXY http_proxy HTTP_PROXY https_proxy HTTPS_PROXY no_proxy NO_PROXY 2>/dev/null || true
+
+# 使用项目自带 venv
+PY=venv/bin/python
+if [ ! -x "$PY" ]; then
+    PY=python3
+fi
+
+echo "启动界面: http://127.0.0.1:7860  (Ctrl+C 退出)"
+exec "$PY" -m app.server

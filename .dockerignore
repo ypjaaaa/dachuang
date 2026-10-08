@@ -1,0 +1,8 @@
+venv/
+models/
+data/
+__pycache__/
+*.pyc
+.git/
+技术实现方案分析.md
+现有软硬件盘点与实施计划.md

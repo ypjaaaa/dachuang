@@ -1,0 +1,23 @@
+# 会议知识库 · 一键部署
+# 用法: docker compose up -d  然后浏览器访问 http://localhost:7860
+version: "3.8"
+
+services:
+  meeting-kb:
+    build: .
+    container_name: meeting-kb
+    ports:
+      - "7860:7860"
+    volumes:
+      # 模型(约 9GB)与数据(向量库/音频)挂载自宿主机,镜像保持轻量
+      - ./models:/app/models
+      - ./data:/app/data
+    restart: unless-stopped
+    # 恢复 GPU 后取消下面注释即可启用 CUDA 加速
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]

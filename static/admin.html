@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理后台 · 会议知识库</title>
+<style>
+  :root {
+    --bg:#eef5ff; --card:#fff; --ink:#33415c; --muted:#8ba3c7; --line:#dbe7ff;
+    --brand:#7fb3ff; --ok:#34b399; --err:#f472b6; --soft:#fff0f6;
+    --chip:#e8f4ff; --grad:linear-gradient(135deg,#a5c8ff,#c4b5ff 50%,#ffb3d1);
+  }
+  body.dark {
+    --bg:#1a2233; --card:#232c42; --ink:#e8ecf5; --muted:#9aa8c4; --line:#2e3a55;
+    --brand:#8fb8ff; --ok:#4fd1c5; --err:#f472b6; --soft:#2f3a58; --chip:#25314e;
+    --grad:linear-gradient(135deg,#5b8df7,#a07ff0 55%,#e879a9);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;min-height:100vh}
+  .nav{position:sticky;top:0;z-index:50;background:var(--card);border-bottom:1px solid var(--line);
+       padding:0 22px;height:58px;display:flex;align-items:center;gap:12px}
+  .logo{width:32px;height:32px;border-radius:9px;background:var(--grad);display:flex;align-items:center;
+        justify-content:center;color:#fff;font-size:16px}
+  .nav .t{font-weight:700;font-size:15px}
+  .nav .sub{font-size:12px;color:var(--muted)}
+  .nav .sp{flex:1}
+  .navbtn{border:1px solid var(--line);background:var(--card);color:var(--brand);border-radius:999px;
+          padding:5px 12px;font-size:12px;cursor:pointer;text-decoration:none;font-family:inherit;white-space:nowrap}
+  .navbtn:hover{border-color:var(--brand)}
+  .tabs{max-width:1180px;margin:16px auto 0;padding:0 20px;display:flex;gap:8px}
+  .tab{border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:10px 10px 0 0;
+       padding:9px 18px;cursor:pointer;font-size:14px;font-weight:600;font-family:inherit}
+  .tab.on{color:var(--brand);background:var(--chip);border-color:var(--line)}
+  .wrap{max-width:1180px;margin:0 auto;padding:14px 20px 40px}
+  .panel{display:none}.panel.on{display:block}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 1px 3px rgba(120,150,200,.1)}
+  .head{padding:13px 18px;border-bottom:1px solid var(--line);font-weight:600;font-size:14px;display:flex;
+        align-items:center;gap:8px}
+  .head .dot{width:8px;height:8px;border-radius:50%;background:var(--brand)}
+  .body{padding:14px 18px}
+  /* 概览 */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;text-align:center}
+  .stat .v{font-size:26px;font-weight:700;color:var(--brand)}
+  .stat .k{font-size:12px;color:var(--muted);margin-top:4px}
+  /* 表格 */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+  th{color:var(--muted);font-weight:600;white-space:nowrap;background:var(--chip)}
+  tr:hover td{background:var(--soft)}
+  .tag{display:inline-block;font-size:11px;padding:2px 9px;border-radius:999px;border:1px solid var(--line)}
+  .tag.admin{color:var(--brand);background:var(--chip)}
+  .tag.off{color:var(--err)}
+  .sbtn{border:1px solid var(--line);background:var(--chip);color:var(--brand);border-radius:7px;font-size:12px;
+        padding:4px 9px;cursor:pointer;font-family:inherit;margin:2px}
+  .sbtn:hover{border-color:var(--brand)}
+  .sbtn.danger{color:var(--err)}
+  .sbtn:disabled{opacity:.45;cursor:not-allowed}
+  .empty{color:var(--muted);padding:16px;text-align:center;font-size:13px}
+  .errline{color:var(--err);font-size:12px;margin-top:8px;min-height:14px}
+  .modal-mask{position:fixed;inset:0;background:rgba(10,16,30,.55);display:none;align-items:center;
+              justify-content:center;z-index:200;padding:20px}
+  .modal-mask.open{display:flex}
+  .modal{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;
+         width:min(700px,96vw);max-height:84vh;display:flex;flex-direction:column;overflow:hidden}
+  .mh{padding:13px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;
+      align-items:center;font-weight:600}
+  .mclose{border:none;background:transparent;color:var(--muted);font-size:18px;cursor:pointer}
+  .mb{padding:14px 16px;overflow:auto}
+  .mf{padding:11px 16px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+  .raw-pre{white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,Consolas,monospace;
+           font-size:12.5px;line-height:1.7;background:var(--chip);border:1px solid var(--line);
+           border-radius:8px;padding:10px;max-height:52vh;overflow:auto;margin:0}
+  .seg-tabs{display:flex;gap:6px;margin-bottom:10px}
+  .st{border:1px solid var(--line);background:var(--card);color:var(--muted);font-size:12px;padding:4px 12px;
+      border-radius:999px;cursor:pointer;font-family:inherit}
+  .st.on{background:var(--chip);color:var(--brand);font-weight:600;border-color:var(--brand)}
+  .field label{display:block;font-size:12px;color:var(--muted);margin:8px 0 5px;font-weight:600}
+  .field input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:9px;font-size:14px;
+               font-family:inherit;outline:none;background:var(--card);color:var(--ink)}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:300;background:#1f2937;color:#fff;
+         padding:9px 16px;border-radius:999px;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,.25);max-width:80vw}
+  .toast.err{background:#dc2626}.toast[hidden]{display:none}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="logo">🛠</div>
+  <div>
+    <div class="t">会议知识库 · 管理后台</div>
+    <div class="sub" id="who">…</div>
+  </div>
+  <div class="sp"></div>
+  <a class="navbtn" href="/">🏠 返回主站</a>
+  <button class="navbtn" id="logoutBtn">退出登录</button>
+  <button class="navbtn" id="themeBtn">🌙</button>
+</nav>
+
+<div class="tabs">
+  <button class="tab on" data-p="stats">📊 系统概览</button>
+  <button class="tab" data-p="users">👥 用户管理</button>
+  <button class="tab" data-p="meetings">🗂 会议管理</button>
+</div>
+
+<div class="wrap">
+  <!-- 概览 -->
+  <section class="panel on" id="p-stats">
+    <div class="stats">
+      <div class="stat"><div class="v" id="s-users">–</div><div class="k">用户总数</div></div>
+      <div class="stat"><div class="v" id="s-admins">–</div><div class="k">管理员</div></div>
+      <div class="stat"><div class="v" id="s-disabled">–</div><div class="k">已禁用</div></div>
+      <div class="stat"><div class="v" id="s-meetings">–</div><div class="k">会议数</div></div>
+      <div class="stat"><div class="v" id="s-chunks">–</div><div class="k">知识块</div></div>
+      <div class="stat"><div class="v" id="s-chars">–</div><div class="k">总字数</div></div>
+    </div>
+  </section>
+
+  <!-- 用户管理 -->
+  <section class="panel" id="p-users">
+    <div class="card">
+      <div class="head"><span class="dot"></span>用户列表 <span id="uCount"></span></div>
+      <div class="body" style="overflow:auto">
+        <table>
+          <thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>状态</th><th>注册时间</th><th>会议数</th><th>操作</th></tr></thead>
+          <tbody id="userRows"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 会议管理 -->
+  <section class="panel" id="p-meetings">
+    <div class="card">
+      <div class="head"><span class="dot"></span>全部会议(跨用户) <span id="mCount"></span>
+        <button class="sbtn" id="mRefresh" style="margin-left:auto">↻ 刷新</button></div>
+      <div class="body" style="overflow:auto">
+        <table>
+          <thead><tr><th>标题</th><th>归属用户</th><th>日期</th><th>类型</th><th>知识块</th><th>入库时间</th><th>操作</th></tr></thead>
+          <tbody id="meetRows"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- 通用弹窗 -->
+<div class="modal-mask" id="modal"><div class="modal">
+  <div class="mh"><span id="mTitle"></span><button class="mclose" id="mClose">✕</button></div>
+  <div class="mb" id="mBody"></div>
+  <div class="mf" id="mFoot"></div>
+</div></div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const AUTH_KEY = 'mkb_token', AUTH_USER = 'mkb_user';
+let ME = null;
+
+function getToken(){ return localStorage.getItem(AUTH_KEY) || ''; }
+function esc(s){ return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(text, cls){ const t=$('toast'); t.textContent=text; t.className='toast'+(cls?' '+cls:''); t.hidden=false; clearTimeout(t._tm); t._tm=setTimeout(()=>t.hidden=true, cls==='err'?6000:3000); }
+function openModal(title){ $('modal').classList.add('open'); $('mTitle').textContent=title; $('mBody').innerHTML=''; $('mFoot').innerHTML=''; }
+function closeModal(){ $('modal').classList.remove('open'); }
+$('mClose').onclick = closeModal;
+$('modal').addEventListener('click', e => { if (e.target === $('modal')) closeModal(); });
+
+async function api(path, init){
+  init = init || {};
+  const headers = new Headers(init.headers || {});
+  const t = getToken();
+  if (t) headers.set('Authorization', 'Bearer ' + t);
+  const res = await fetch(path, Object.assign({}, init, { headers }));
+  let d = null;
+  try { d = await res.json(); } catch(e) { d = {}; }
+  if (res.status === 401) { localStorage.removeItem(AUTH_KEY); location.href = '/'; throw new Error('未登录'); }
+  if (res.status === 403 && d && d.error) { toast(d.error, 'err'); throw new Error(d.error); }
+  if (!d || d.ok === false) { throw new Error((d && d.error) || ('请求失败 ' + res.status)); }
+  return d;
+}
+
+/* ---------- 主题 ---------- */
+(function(){
+  const s = localStorage.getItem('theme');
+  if (s === 'dark' || (!s && window.matchMedia('(prefers-color-scheme: dark)').matches)) document.body.classList.add('dark');
+})();
+$('themeBtn').onclick = () => { const d = document.body.classList.toggle('dark'); $('themeBtn').textContent = d ? '☀️' : '🌙'; localStorage.setItem('theme', d ? 'dark' : 'light'); };
+
+/* ---------- Tab ---------- */
+document.querySelectorAll('.tab').forEach(tb => {
+  tb.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+    document.querySelectorAll('.panel').forEach(x => x.classList.remove('on'));
+    tb.classList.add('on');
+    $('p-' + tb.dataset.p).classList.add('on');
+  };
+});
+
+/* ---------- 概览 ---------- */
+async function loadStats(){
+  const d = await api('/api/admin/stats');
+  const s = d.stats;
+  $('s-users').textContent = s.users; $('s-admins').textContent = s.admins;
+  $('s-disabled').textContent = s.disabled; $('s-meetings').textContent = s.meetings;
+  $('s-chunks').textContent = s.chunks;
+  $('s-chars').textContent = s.chars >= 10000 ? (s.chars/10000).toFixed(1) + ' 万' : s.chars;
+}
+
+/* ---------- 用户管理 ---------- */
+async function loadUsers(){
+  const d = await api('/api/admin/users');
+  const list = d.users || [];
+  $('uCount').textContent = '(' + list.length + ')';
+  const box = $('userRows');
+  if (!list.length){ box.innerHTML = '<tr><td colspan="7" class="empty">暂无用户</td></tr>'; return; }
+  box.innerHTML = '';
+  list.forEach(u => {
+    const isMe = u.id === ME.id;
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + u.id + '</td>' +
+      '<td>' + esc(u.username) + (isMe ? ' <span class="tag admin">我</span>' : '') + '</td>' +
+      '<td><span class="tag ' + (u.role==='admin'?'admin':'') + '">' + (u.role==='admin'?'管理员':'普通用户') + '</span></td>' +
+      '<td>' + (u.disabled ? '<span class="tag off">已禁用</span>' : '<span class="tag">正常</span>') + '</td>' +
+      '<td>' + esc((u.created_at||'').slice(0,19).replace('T',' ')) + '</td>' +
+      '<td>' + u.meetings + '</td>' +
+      '<td style="white-space:nowrap">' +
+        '<button class="sbtn" data-a="toggle">' + (u.disabled ? '启用' : '禁用') + '</button>' +
+        '<button class="sbtn" data-a="role">' + (u.role==='admin' ? '降为普通' : '设为管理员') + '</button>' +
+        '<button class="sbtn" data-a="reset">重置密码</button>' +
+        '<button class="sbtn danger" data-a="del"' + (isMe ? ' disabled' : '') + '>删除</button>' +
+      '</td>';
+    tr.querySelector('[data-a="toggle"]').onclick = async () => {
+      try { await api('/api/admin/users/' + u.id + '/' + (u.disabled ? 'enable' : 'disable'), {method:'POST'}); toast(u.disabled ? '已启用「'+u.username+'」' : '已禁用「'+u.username+'」'); loadUsers(); } catch(e){}
+    };
+    tr.querySelector('[data-a="role"]').onclick = async () => {
+      const next = u.role === 'admin' ? 'user' : 'admin';
+      if (next === 'user' && !confirm('把管理员「' + u.username + '」降为普通用户?')) return;
+      try { await api('/api/admin/users/' + u.id + '/role', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({role: next})}); toast('已更新「'+u.username+'」角色'); loadUsers(); } catch(e){}
+    };
+    tr.querySelector('[data-a="reset"]').onclick = () => resetPwModal(u);
+    tr.querySelector('[data-a="del"]').onclick = async () => {
+      if (!confirm('确定删除用户「' + u.username + '」吗?\n其名下 ' + u.meetings + ' 个会议(知识块/转写稿)将一并删除,不可恢复!')) return;
+      try { await api('/api/admin/users/' + u.id, {method:'DELETE'}); toast('已删除用户「'+u.username+'」'); loadUsers(); loadStats(); } catch(e){}
+    };
+    box.appendChild(tr);
+  });
+}
+
+function resetPwModal(u){
+  openModal('重置密码 · ' + u.username);
+  $('mBody').innerHTML =
+    '<div class="field"><label>为用户设置新密码(6-64 位)</label><input type="password" id="newPw"></div>' +
+    '<div class="errline" id="pwErr"></div>';
+  $('mFoot').innerHTML = '<button class="sbtn" id="pwOk">确定</button><button class="sbtn danger" id="pwNo">取消</button>';
+  $('pwNo').onclick = closeModal;
+  $('pwOk').onclick = async () => {
+    const v = $('newPw').value;
+    if (!v) { $('pwErr').textContent = '请输入新密码'; return; }
+    try {
+      await api('/api/admin/users/' + u.id + '/reset_password', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({password: v})});
+      toast('已重置「' + u.username + '」的密码'); closeModal();
+    } catch(e){ $('pwErr').textContent = e.message; }
+  };
+}
+
+/* ---------- 会议管理 ---------- */
+async function loadMeetings(){
+  const d = await api('/api/meetings');
+  const list = d.meetings || [];
+  $('mCount').textContent = '(' + list.length + ')';
+  const box = $('meetRows');
+  if (!list.length){ box.innerHTML = '<tr><td colspan="7" class="empty">还没有任何会议</td></tr>'; return; }
+  box.innerHTML = '';
+  list.forEach(m => {
+    const tr = document.createElement('tr');
+    const kindTxt = m.kind === 'video' ? '🎬 录屏' : (m.kind === 'txt' ? '📄 文本' : '🎧 音频');
+    tr.innerHTML =
+      '<td>' + esc(m.title) + '</td>' +
+      '<td>' + esc(m.owner_name || ('#' + (m.owner ?? '—'))) + '</td>' +
+      '<td>' + esc(m.date || '—') + '</td>' +
+      '<td>' + kindTxt + '</td>' +
+      '<td>' + m.chunks + '</td>' +
+      '<td>' + esc((m.created||'').slice(0,19).replace('T',' ')) + '</td>' +
+      '<td style="white-space:nowrap">' +
+        '<button class="sbtn" data-a="raw">原文</button>' +
+        (m.has_source
+          ? '<button class="sbtn" data-a="src" title="导出该会议的原始录音/录屏文件">源文件</button>'
+          : '<button class="sbtn" data-a="src" disabled title="该会议未保存源文件(升级前的历史会议)">源文件</button>') +
+        '<button class="sbtn danger" data-a="del">删除</button>' +
+      '</td>';
+    tr.querySelector('[data-a="raw"]').onclick = () => viewRaw(m);
+    const srcEl = tr.querySelector('[data-a="src"]');
+    if (srcEl && !srcEl.disabled) srcEl.onclick = () => downloadSource(m);
+    tr.querySelector('[data-a="del"]').onclick = async () => {
+      if (!confirm('确定删除会议《' + m.title + '》(归属 ' + esc(m.owner_name||'?') + ')吗?\n此操作不可恢复!')) return;
+      try { await api('/api/meetings/' + encodeURIComponent(m.id), {method:'DELETE'}); toast('已删除会议'); loadMeetings(); loadStats(); } catch(e){}
+    };
+    box.appendChild(tr);
+  });
+}
+
+/* 导出会议源文件(管理员可导出任意用户的原始录音/录屏) */
+async function downloadSource(m){
+  toast('正在准备源文件…');
+  try {
+    const res = await fetch('/api/meetings/' + encodeURIComponent(m.id) + '/source', {
+      headers: { 'Authorization': 'Bearer ' + getToken() },
+    });
+    if (res.status === 401) { localStorage.removeItem(AUTH_KEY); location.href = '/'; return; }
+    if (!res.ok) {
+      let d = {}; try { d = await res.json(); } catch(e) {}
+      toast('❌ ' + (d.error || '导出失败'), 'err');
+      return;
+    }
+    const blob = await res.blob();
+    const name = m.file || (m.title + (m.kind === 'video' ? '.mp4' : '.mp3'));
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.click();
+    URL.revokeObjectURL(url);
+    toast('✅ 已导出源文件:' + name);
+  } catch(e) { toast('❌ 导出失败:' + e.message, 'err'); }
+}
+
+async function viewRaw(m){
+  openModal('会议原文 · ' + m.title);
+  $('mBody').innerHTML = '<div class="raw-pre">正在获取…</div>';
+  try {
+    const [raw, cleaned] = await Promise.all([
+      api('/api/meetings/' + encodeURIComponent(m.id) + '/raw'),
+      api('/api/meetings/' + encodeURIComponent(m.id) + '/cleaned'),
+    ]);
+    $('mBody').innerHTML =
+      '<div class="seg-tabs">' +
+      '<button class="st on" data-v="raw">🗒 原始转写稿</button>' +
+      '<button class="st" data-v="clean">🧹 清洗稿</button></div>' +
+      '<pre class="raw-pre" data-v="raw">' + esc(raw.raw || '(无原始稿)') + '</pre>' +
+      '<pre class="raw-pre" data-v="clean" hidden>' + esc(cleaned.cleaned || '(无内容)') + '</pre>';
+    $('mFoot').innerHTML = '<button class="sbtn danger" id="vwNo">关闭</button>';
+    $('vwNo').onclick = closeModal;
+    $('mBody').querySelectorAll('.st').forEach(b => b.onclick = () => {
+      $('mBody').querySelectorAll('.st').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      $('mBody').querySelectorAll('.raw-pre').forEach(el => el.hidden = el.dataset.v !== b.dataset.v);
+    });
+  } catch(e){ $('mBody').innerHTML = '<div class="errline">获取失败:' + esc(e.message) + '</div>'; }
+}
+$('mRefresh').onclick = () => { loadMeetings(); loadStats(); };
+
+/* ---------- 初始化 ---------- */
+async function boot(){
+  const t = getToken();
+  if (!t) { location.href = '/'; return; }
+  try {
+    const d = await api('/api/auth/me');
+    ME = d.user;
+    if (ME.role !== 'admin') { toast('该账号不是管理员', 'err'); setTimeout(() => location.href = '/', 800); return; }
+    $('who').textContent = '管理员:' + esc(ME.username);
+    await Promise.all([loadStats(), loadUsers(), loadMeetings()]);
+  } catch (e) { /* api() 已处理跳转 */ }
+}
+$('logoutBtn').onclick = () => { localStorage.removeItem(AUTH_KEY); localStorage.removeItem(AUTH_USER); location.href = '/'; };
+boot();
+</script>
+</body>
+</html>

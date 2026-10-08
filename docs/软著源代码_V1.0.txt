@@ -1,0 +1,779 @@
+===== 第 1 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+// 文件: app/asr.py  共 46 行
+"""ASR 转写:faster-whisper,输出带时间戳的段落列表"""
+from faster_whisper import WhisperModel
+
+from . import config
+
+
+_model = None
+
+
+def get_model():
+    global _model
+    if _model is None:
+        _model = WhisperModel(
+            config.ASR_MODEL,
+            device=config.DEVICE,  # cuda / cpu
+            compute_type="int8",
+            download_root=str(config.MODELS_DIR),
+        )
+    return _model
+
+
+def transcribe(audio_path: str) -> list[dict]:
+    """转写音频,返回 [{start, end, text}] 段落列表(秒为单位)"""
+    segments, info = get_model().transcribe(
+        audio_path,
+        language="zh",
+        vad_filter=True,          # 过滤静音
+        beam_size=5,
+    )
+    result = []
+    for seg in segments:
+        result.append({
+            "start": round(seg.start, 2),
+            "end": round(seg.end, 2),
+            "text": seg.text.strip(),
+        })
+    return result
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 2:
+        print("用法: python -m app.asr <音频文件>")
+        sys.exit(1)
+    for seg in transcribe(sys.argv[1]):
+        print(f"[{seg['start']:.1f}-{seg['end']:.1f}] {seg['text']}")
+
+// 文件: app/chunk.py  共 58 行
+
+===== 第 2 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+"""智能分块:按时间戳自然段合并 + 超长段递归切分(保留时间戳元数据)"""
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+MAX_CHARS = 500   # 目标块大小
+OVERLAP = 80      # 重叠字符
+
+
+def chunk_segments(segments: list[dict]) -> list[dict]:
+    """把 ASR 段落切成知识块,每块带 start/end 时间戳元数据"""
+    chunks = []
+    cur_text, cur_start, cur_end = "", None, None
+
+    def flush():
+        nonlocal cur_text, cur_start, cur_end
+        if not cur_text.strip():
+            return
+        # 超长段用递归切分器二次切(按标点/换行,带重叠,避免语义断裂)
+        if len(cur_text) > MAX_CHARS:
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=MAX_CHARS, chunk_overlap=OVERLAP,
+                separators=["\n", "。", "！", "？", "；", "，", " ", ""],
+            )
+            pieces = splitter.split_text(cur_text)
+            n = len(pieces)
+            for i, piece in enumerate(pieces):
+                chunks.append({
+                    "text": piece.strip(),
+                    "start": round(cur_start + (cur_end - cur_start) * i / max(n, 1), 2),
+                    "end": round(cur_start + (cur_end - cur_start) * (i + 1) / max(n, 1), 2),
+                })
+        else:
+            chunks.append({"text": cur_text.strip(), "start": cur_start, "end": cur_end})
+        cur_text, cur_start, cur_end = "", None, None
+
+    for seg in segments:
+        text = seg["text"]
+        if not text:
+            continue
+        if cur_start is None:
+            cur_start = seg["start"]
+        # 语义边界:按 ASR 的句子分隔(遇句号/问号等结束符则切)
+        cur_end = seg["end"]
+        cur_text += text + ("\n" if text.endswith(("。", "！", "？", "!", "?")) else "")
+        if len(cur_text) >= MAX_CHARS or text.endswith(("。", "！", "？", "!", "?")):
+            flush()
+
+    flush()
+    return chunks
+
+
+===== 第 3 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+
+if __name__ == "__main__":
+    demo = [
+        {"start": 0.0, "end": 3.0, "text": "今天我们讨论项目的技术方案。"},
+        {"start": 3.0, "end": 6.0, "text": "首先确定使用 RAG 技术。"},
+        {"start": 6.0, "end": 10.0, "text": "然后是向量数据库的选型,我们倾向轻量方案。"},
+    ]
+    for c in chunk_segments(demo):
+        print(c)
+
+// 文件: app/config.py  共 45 行
+"""全局配置:路径、模型、向量库参数"""
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent  # ~/大创
+MODELS_DIR = BASE_DIR / "models"
+DATA_DIR = BASE_DIR / "data"
+AUDIO_DIR = DATA_DIR / "audio"
+TRANSCRIPT_DIR = DATA_DIR / "transcripts"
+MILVUS_DIR = DATA_DIR / "milvus_lite"  # Milvus Lite 数据文件
+
+for d in (MODELS_DIR, AUDIO_DIR, TRANSCRIPT_DIR, MILVUS_DIR):
+    d.mkdir(parents=True, exist_ok=True)
+
+# ---------- 模型 ----------
+# 直接指向 ModelScope 已下载的本地 snapshot 目录(faster-whisper 支持本地路径,避免联网)
+ASR_MODEL = str(MODELS_DIR / "whisper" / "models" / "Systran--faster-whisper-large-v3" / "snapshots" / "master")
+EMBED_MODEL = str(MODELS_DIR / "embed" / "models" / "BAAI--bge-large-zh-v1.5" / "snapshots" / "master")
+RERANK_MODEL = str(MODELS_DIR / "reranker" / "models" / "BAAI--bge-reranker-v2-m3" / "snapshots" / "master")
+LLM_GGUF = MODELS_DIR / "llm" / "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf"  # 分片首文件,llama.cpp 自动合并
+LLM_REPO = "Qwen/Qwen2.5-7B-Instruct-GGUF"       # ModelScope 仓库
+
+# 计算设备:启动时自动检测,GPU 可用 → cuda + LLM 全上 GPU;不可用 → cpu 兜底
+try:
+    import torch
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    LLM_GPU_LAYERS = -1 if DEVICE == "cuda" else 0   # -1 = 全部层上 GPU
+except ImportError:
+    DEVICE = "cpu"
+    LLM_GPU_LAYERS = 0
+
+# ---------- 向量库(Milvus Lite) ----------
+COLLECTION = "meeting_kb"
+VECTOR_DIM = 1024          # bge-large-zh-v1.5 的维度
+EMBED_BATCH = 32
+
+# ---------- 检索 ----------
+TOP_K = 4
+VEC_TOP_K = 20            # 向量召回数
+
+===== 第 4 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+BM25_TOP_K = 20           # BM25 召回数
+RERANK_TOP = 30           # 进 rerank 的候选数;0 = 关闭 rerank
+MIN_SCORE = 0.01          # 相关度阈值(rerank 后为 sigmoid 概率:相关 0.01-0.99,噪声 ~0.0000)
+
+# ---------- LLM ----------
+LLM_CTX = 8192
+# LLM_GPU_LAYERS 已由上方自动检测决定(cuda 时 -1,CPU 时 0)
+
+// 文件: app/download_models.py  共 55 行
+"""模型下载:从 ModelScope 下载 faster-whisper / bge / Qwen GGUF 到本地"""
+import os
+
+from modelscope import snapshot_download
+
+from . import config
+
+# ModelScope SDK 目录/缓存全部放进项目内(避免写入 ~/.modelscope 受限)
+os.environ.setdefault("MODELSCOPE_HOME", str(config.MODELS_DIR / ".modelscope_home"))
+os.environ.setdefault("MODELSCOPE_CACHE", str(config.MODELS_DIR / ".modelscope_cache"))
+
+REPOS = {
+    "asr": ("Systran/faster-whisper-large-v3", "whisper"),
+    "embed": ("BAAI/bge-large-zh-v1.5", "embed"),
+    "llm": ("Qwen/Qwen2.5-7B-Instruct-GGUF", "llm"),
+}
+
+
+def download_llm_gguf():
+    """下载 Qwen GGUF(Q4_K_M 分片,共约 4.7GB)"""
+    print("下载 Qwen2.5-7B-Instruct GGUF(Q4_K_M,约 4.7GB)...")
+    path = snapshot_download(
+        REPOS["llm"][0], cache_dir=str(config.MODELS_DIR / "llm"),
+        allow_file_pattern=["*q4_k_m*.gguf"],   # 注意:文件名是小写
+    )
+    # 把分片文件集中到 models/llm/ 下,便于 llama.cpp 自动识别分片
+    import shutil
+    from pathlib import Path
+    src = Path(path)
+    target_dir = config.MODELS_DIR / "llm"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    found = sorted(src.rglob("*q4_k_m*.gguf"))
+    if found:
+        for f in found:
+            dst = target_dir / f.name
+            if not dst.exists():
+                shutil.copy(f, dst)
+            print(f"  ✓ {f.name} ({f.stat().st_size/1024**3:.2f} GB)")
+        print(f"完成: {len(found)} 个分片已就位,首分片 = {found[0].name}")
+    else:
+
+===== 第 5 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+        print("未找到 q4_k_m 文件,请手动处理")
+
+
+if __name__ == "__main__":
+    import sys
+    which = sys.argv[1] if len(sys.argv) > 1 else "all"
+    if which in ("asr", "all"):
+        print("下载 faster-whisper-large-v3 ...")
+        snapshot_download(REPOS["asr"][0], cache_dir=str(config.MODELS_DIR / "whisper"))
+    if which in ("embed", "all"):
+        print("下载 bge-large-zh-v1.5 ...")
+        snapshot_download(REPOS["embed"][0], cache_dir=str(config.MODELS_DIR / "embed"))
+    if which in ("llm", "all"):
+        download_llm_gguf()
+    print("全部下载完成")
+
+// 文件: app/embed.py  共 27 行
+"""向量嵌入:bge-large-zh-v1.5,sentence-transformers 本地推理"""
+from sentence_transformers import SentenceTransformer
+
+from . import config
+
+
+_model = None
+
+
+def get_model():
+    global _model
+    if _model is None:
+        _model = SentenceTransformer(
+            config.EMBED_MODEL,
+            cache_folder=str(config.MODELS_DIR),
+            device=config.DEVICE,  # cuda / cpu
+        )
+    return _model
+
+
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    """批量嵌入,返回归一化向量列表"""
+    vecs = get_model().encode(
+        texts, batch_size=config.EMBED_BATCH,
+        normalize_embeddings=True, convert_to_numpy=True,
+    )
+    return vecs.tolist()
+
+// 文件: app/evaluate.py  共 42 行
+"""检索评测:用标注测试集量化"问答检索准确率"(PPT 验收指标 ≥80%)
+
+用法: python -m app.evaluate
+
+===== 第 6 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+测试集格式: (问题, 期望命中的 [来源标题, 起始秒], 备注)
+hit@k:期望段落出现在 top-k 检索结果中即算命中。
+"""
+from .query import retrieve
+
+# 基于现有知识库(会议.m4a / 达摩院示例 / 歌曲)的标注测试集
+TEST_SET = [
+    ("组会里HBase查询变慢的原因是什么?", [["组会录音测试", 46.28]], "原因段落"),
+    ("查询性能问题的修复方案是什么?", [["组会录音测试", 77.98]], "修复方案段落"),
+    ("CPU达不到90%是怎么回事?", [["组会录音测试", 33.28]], "问题描述段落"),
+    ("前端过滤条件没有被强制执行,导致了什么问题?", [["组会录音测试", 46.28]], "根因段落"),
+    ("达摩院推出的语音识别模型是做什么的?", [["达摩院语音识别体验", 0.56]], "达摩院段落"),
+    ("这首歌的歌词描述了什么场景?", [["夏天的风(Live)", 28.34]], "歌曲段落"),
+]
+
+
+def evaluate(top_k: int = 4) -> dict:
+    hits_total = 0
+    details = []
+    for q, expects, note in TEST_SET:
+        results = retrieve(q, top_k=top_k)
+        hit_keys = {(r["title"], r["start"]) for r in results}
+        expected_keys = {(t, s) for t, s in expects}
+        ok = expected_keys.issubset(hit_keys)
+        hits_total += ok
+        details.append((q, note, ok, [(r["title"], r["start"], r["score"]) for r in results]))
+    acc = hits_total / len(TEST_SET)
+    print(f"测试题数: {len(TEST_SET)} | top_k={top_k}")
+    for q, note, ok, res in details:
+        mark = "✅" if ok else "❌"
+        print(f"{mark} [{note}] {q}")
+        for t, s, sc in res:
+            print(f"      -> {t} @{s}秒 score={sc}")
+    print(f"\n检索准确率: {hits_total}/{len(TEST_SET)} = {acc*100:.1f}% (目标 ≥80%)")
+    return {"accuracy": acc, "hits": hits_total, "total": len(TEST_SET)}
+
+
+if __name__ == "__main__":
+    evaluate()
+
+// 文件: app/ingest.py  共 122 行
+"""入库管道：音频 → 转写 → 分块 → 嵌入 → Milvus Lite"""
+import re
+import uuid
+from pymilvus import MilvusClient
+
+from . import config
+from .asr import transcribe
+from .chunk import chunk_segments
+
+===== 第 7 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+from .embed import embed_texts
+
+
+# ---------- 模拟会议文本解析函数 ----------
+def parse_mock_meeting(file_path: str) -> list:
+    """
+    解析 .txt 模拟会议文件，直接生成带时间戳的 chunks
+    字段名与音频流程保持一致：start / end
+    """
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    # 提取标题和日期
+    title_match = re.search(r'会议标题[：:]\s*(.+)', content)
+    date_match = re.search(r'会议日期[：:]\s*(.+)', content)
+    title = title_match.group(1).strip() if title_match else "未命名会议"
+    date = date_match.group(1).strip() if date_match else ""
+
+    # 提取所有带时间戳的行 [HH:MM:SS]
+    pattern = r'\[(\d{2}:\d{2}:\d{2})\]\s*(.+)'
+    matches = re.findall(pattern, content)
+
+    chunks = []
+    for time_str, text in matches:
+        h, m, s = map(int, time_str.split(':'))
+        start_seconds = h * 3600 + m * 60 + s
+
+        chunks.append({
+            "id": str(uuid.uuid4()),
+            "text": text.strip(),
+            "start": start_seconds,       # 与音频流程字段名一致
+            "end": start_seconds + 5,     # 模拟每段持续5秒
+            "meeting_title": title,
+            "meeting_date": date
+        })
+    return chunks
+
+
+# ---------- Milvus 客户端 ----------
+def _client() -> MilvusClient:
+    c = MilvusClient(str(config.MILVUS_DIR / "meeting.db"))
+    if not c.has_collection(config.COLLECTION):
+        c.create_collection(
+            collection_name=config.COLLECTION,
+            dimension=config.VECTOR_DIM,
+            metric_type="COSINE",
+            id_type="string",
+        )
+    try:
+
+===== 第 8 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+        c.load_collection(config.COLLECTION)
+    except Exception:
+        pass
+    return c
+
+
+# ---------- 主入库函数 ----------
+def ingest(audio_path: str, title: str = "", date: str = "") -> int:
+    """处理单个音频/文本文件入库，返回入库块数"""
+    
+    # ---------- 根据文件类型分流 ----------
+    if audio_path.endswith('.txt'):
+        # 🟢 模拟会议文本：直接解析，跳过 Whisper
+        print(f"[1/3] 解析模拟会议: {audio_path} ...")
+        chunks = parse_mock_meeting(audio_path)
+        print(f"      解析完成，{len(chunks)} 个段落")
+        # 如果没传 title/date，从解析结果里补
+        if not title and chunks:
+            title = chunks[0].get("meeting_title", "未命名会议")
+        if not date and chunks:
+            date = chunks[0].get("meeting_date", "")
+    else:
+        # 🔵 音频文件：走 Whisper 转写 + 分块
+        print(f"[1/4] 转写: {audio_path} ...")
+        segments = transcribe(audio_path)
+        print(f"      转写完成，{len(segments)} 个段落")
+
+        print("[2/4] 分块 ...")
+        chunks = chunk_segments(segments)
+        print(f"      共 {len(chunks)} 个知识块")
+
+    # ---------- 嵌入 + 入库（两种模式共用） ----------
+    print("[3/4] 嵌入 ...")
+    texts = [c["text"] for c in chunks]
+    vecs = embed_texts(texts)
+
+    print("[4/4] 入库 Milvus ...")
+    client = _client()
+    rows = []
+    for c, v in zip(chunks, vecs):
+        rows.append({
+            "id": str(uuid.uuid4()),
+            "vector": v,
+            "text": c["text"],
+            "start": c["start"],
+            "end": c["end"],
+            "source": str(audio_path),
+            "title": title,
+            "date": date,
+
+===== 第 9 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+        })
+    client.insert(config.COLLECTION, rows)
+    print(f"      入库完成，共 {len(rows)} 条")
+    return len(rows)
+
+
+# ---------- 命令行入口 ----------
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 2:
+        print("用法: python -m app.ingest <音频文件> [标题] [日期]")
+        print("  或: python -m app.ingest <会议.txt> [标题] [日期]")
+        sys.exit(1)
+    title = sys.argv[2] if len(sys.argv) > 2 else ""
+    date = sys.argv[3] if len(sys.argv) > 3 else ""
+    ingest(sys.argv[1], title, date)
+
+// 文件: app/llm.py  共 79 行
+"""本地 LLM:llama-cpp-python 加载 GGUF,走 Qwen2.5 官方 chat 模板"""
+from pathlib import Path
+
+from . import config
+
+
+_llm = None
+
+
+def load_llm():
+    """懒加载 GGUF 模型;文件不存在时给出下载指引"""
+    global _llm
+    if _llm is not None:
+        return _llm
+    if not Path(config.LLM_GGUF).exists():
+        raise FileNotFoundError(
+            f"GGUF 模型不存在: {config.LLM_GGUF}\n"
+            f"请先从 ModelScope 下载: {config.LLM_REPO} 中的 q4_k_m 分片,\n"
+            f"或运行 python -m app.download_models llm"
+        )
+    try:
+        from llama_cpp import Llama
+        _llm = Llama(
+            model_path=str(config.LLM_GGUF),
+            n_ctx=config.LLM_CTX,
+            n_gpu_layers=config.LLM_GPU_LAYERS,   # 0=CPU;-1=全部上 GPU
+            verbose=False,
+        )
+    except ImportError:
+        raise ImportError("缺少 llama-cpp-python,请: pip install llama-cpp-python")
+    return _llm
+
+===== 第 10 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+
+
+def generate(system: str, user: str, max_tokens: int = 512) -> str:
+    """走 chat 模板生成,输出为纯回答(不再回显 prompt)"""
+    llm = load_llm()
+    out = llm.create_chat_completion(
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        max_tokens=max_tokens,
+        temperature=0.3,
+    )
+    return out["choices"][0]["message"]["content"].strip()
+
+
+REWRITE_SYSTEM = (
+    "你是检索查询重写器。用户正在进行多轮对话,他提出的问题可能是省略了上下文的追问"
+    "(如\"那修复方案呢\"\"然后呢\"\"它是什么\")。"
+    "请结合对话历史,把当前问题改写成一个**独立、完整、可直接用于检索**的查询语句,"
+    "包含必要的人名、术语和上下文。只输出改写后的查询本身,不要任何解释。"
+)
+
+
+def rewrite_query(history: list[dict], question: str) -> str:
+    """结合对话历史,把追问改写为独立完整的检索查询(多轮对话支持)"""
+    if not history:
+        return question
+    llm = load_llm()
+    messages = [
+        {"role": "system", "content": REWRITE_SYSTEM},
+        *history,
+        {"role": "user", "content": f"当前问题:{question}"},
+    ]
+    out = llm.create_chat_completion(
+        messages=messages, max_tokens=80, temperature=0.0,
+    )
+    rewritten = out["choices"][0]["message"]["content"].strip()
+    # 兜底:重写结果异常时退回原问题
+    return rewritten if 4 <= len(rewritten) <= 100 else question
+
+
+def unload():
+    """问答结束后释放显存/内存,给转写让路"""
+    global _llm
+    if _llm is not None:
+        del _llm
+        _llm = None
+
+
+===== 第 11 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+// 文件: app/query.py  共 67 行
+"""RAG 问答:混合检索(BM25+向量+rerank) → Prompt 组装 → 本地 LLM 生成(带来源引用)"""
+from . import config
+from .llm import generate, rewrite_query
+from .retriever import HybridRetriever
+
+SYSTEM_PROMPT = """你是会议知识助手。请严格基于下面提供的会议摘录回答问题。
+若摘录中没有相关信息,请直接说明"会议内容中未找到相关信息",不要编造。
+回答需简洁、条理清晰,并在引用具体内容时标注对应的 [开始时间-结束时间]。
+"""
+
+_retriever = None
+
+
+def retrieve(query: str, top_k: int = config.TOP_K) -> list[dict]:
+    """混合检索 + rerank,返回 [{text, start, end, source, title, score}]"""
+    global _retriever
+    if _retriever is None:
+        _retriever = HybridRetriever()
+    hits = _retriever.search(query, top_k)
+    return [h for h in hits if h["score"] >= config.MIN_SCORE]
+
+
+def build_prompt(query: str, hits: list[dict]) -> tuple[str, str]:
+    """返回 (system, user) 两条消息,供 chat 接口使用"""
+    system = SYSTEM_PROMPT
+    parts = ["以下是会议摘录,请据此回答:\n"]
+    for i, h in enumerate(hits, 1):
+        parts.append(
+            f"[{i}] ({h['start']}-{h['end']}秒, 来自 {h['title']})\n{h['text']}"
+        )
+    parts.append(f"\n问题: {query}")
+    return system, "\n".join(parts)
+
+
+def answer(query: str, history: list[dict] | None = None, top_k: int = config.TOP_K) -> dict:
+    """完整问答,返回 {answer, citations, search_query}
+
+    history: 多轮对话历史 [{"role": "user"/"assistant", "content": ...}, ...]
+    """
+    # 多轮对话:有历史时先重写检索词(追问自动补全上下文)
+    search_query = query
+    if history:
+        search_query = rewrite_query(history, query)
+        print(f"[多轮] 原问题: {query}\n[多轮] 重写后: {search_query}")
+
+    hits = retrieve(search_query, top_k)
+    if not hits:
+        return {"answer": "知识库为空,请先导入会议音频。", "citations": []}
+
+===== 第 12 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+    system, user = build_prompt(search_query, hits)
+    ans = generate(system, user)
+    citations = [
+        {"title": h["title"], "start": h["start"], "end": h["end"],
+         "source": h["source"], "score": h["score"]}
+        for h in hits
+    ]
+    return {"answer": ans, "citations": citations, "search_query": search_query}
+
+
+if __name__ == "__main__":
+    import sys
+    q = sys.argv[1] if len(sys.argv) > 1 else "今天会议讨论了什么技术方案?"
+    r = answer(q)
+    print("== 回答 ==")
+    print(r["answer"])
+    print("\n== 引用来源 ==")
+    for c in r["citations"]:
+        print(f"  [{c['start']}-{c['end']}秒] {c['title']} (score={c['score']})")
+
+// 文件: app/retriever.py  共 120 行
+"""混合检索:BM25 关键词 + 向量语义 → RRF 融合 → bge-reranker 精排
+
+提升专有名词/人名/缩写类问题的召回(关键词),再用 reranker 精排提高准确率。
+数据量小(会议转写几百条),BM25 索引进程内构建一次即可。
+"""
+from collections import defaultdict
+
+import jieba
+from rank_bm25 import BM25Okapi
+from sentence_transformers import CrossEncoder
+from pymilvus import MilvusClient
+
+from . import config
+from .embed import embed_texts
+
+# 中文停用词(精简)
+_STOP = set("的了是在有和就都而及与或这那之,。！？；：、\"'‘’“”（）【】[]《》 ")
+
+
+def tokenize(text: str) -> list[str]:
+    return [w for w in jieba.cut(text) if w.strip() and w not in _STOP]
+
+
+class HybridRetriever:
+    """混合检索器:向量 + BM25,RRF 融合后 rerank 精排"""
+
+    def __init__(self):
+        self._bm25: BM25Okapi | None = None
+
+===== 第 13 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+        self._corpus: list[dict] = []
+        self._reranker = None
+
+    # ---------- 语料与索引 ----------
+    def _load_corpus(self):
+        """从 Milvus 拉全量文本,构建 BM25 索引"""
+        client = MilvusClient(str(config.MILVUS_DIR / "meeting.db"))
+        client.load_collection(config.COLLECTION)
+        self._corpus = client.query(
+            config.COLLECTION, filter="",
+            output_fields=["text", "start", "end", "source", "title"],
+            limit=100000,
+        )
+        self._bm25 = BM25Okapi([tokenize(r["text"]) for r in self._corpus])
+
+    # ---------- 阶段1:向量 + BM25 双路召回 ----------
+    def _vec_search(self, query: str, top_k: int) -> list[tuple[int, float]]:
+        """向量检索,返回 [(corpus_index, score)]"""
+        client = MilvusClient(str(config.MILVUS_DIR / "meeting.db"))
+        if not client.has_collection(config.COLLECTION):
+            return []
+        qv = embed_texts([query])[0]
+        hits = client.search(
+            collection_name=config.COLLECTION, data=[qv], limit=top_k,
+            output_fields=["text", "start", "end", "source", "title"],
+        )[0]
+        # 用 (source, start) 映射回 corpus 下标
+        key2idx = {(r["source"], r["start"]): i for i, r in enumerate(self._corpus)}
+        result = []
+        for h in hits:
+            idx = key2idx.get((h["entity"]["source"], h["entity"]["start"]))
+            if idx is not None:
+                result.append((idx, h["distance"]))
+        return result
+
+    def _bm25_search(self, query: str, top_k: int) -> list[tuple[int, float]]:
+        if self._bm25 is None:
+            return []
+        scores = self._bm25.get_scores(tokenize(query))
+        ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+        return [(i, scores[i]) for i in ranked[:top_k] if scores[i] > 0]
+
+    def _rrf_fuse(self, *ranked_lists: list[tuple[int, float]], k: int = 60) -> list[int]:
+        """Reciprocal Rank Fusion:按排名融合多路结果,返回排序后的 corpus 下标"""
+        fused: dict[int, float] = defaultdict(float)
+        for ranked in ranked_lists:
+            for rank, (idx, _) in enumerate(ranked):
+                fused[idx] += 1.0 / (k + rank + 1)
+        return [i for i, _ in sorted(fused.items(), key=lambda x: x[1], reverse=True)]
+
+===== 第 14 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+
+    # ---------- 阶段2:rerank 精排 ----------
+    def _get_reranker(self) -> CrossEncoder:
+        if self._reranker is None:
+            self._reranker = CrossEncoder(str(config.RERANK_MODEL), device=config.DEVICE)
+        return self._reranker
+
+    def _rerank(self, query: str, candidates: list[int], top_k: int) -> list[dict]:
+        """对候选做交叉编码精排,返回带分数的 top_k 文档"""
+        docs = [self._corpus[i] for i in candidates]
+        scores = self._get_reranker().predict(
+            [[query, d["text"]] for d in docs],
+            apply_sigmoid=True, batch_size=8, show_progress_bar=False,
+        )
+        ordered = sorted(zip(candidates, docs, scores), key=lambda x: x[2], reverse=True)
+        return [
+            {
+                "text": d["text"], "start": d["start"], "end": d["end"],
+                "source": d["source"], "title": d["title"],
+                "score": round(float(s), 4),
+            }
+            for _, d, s in ordered[:top_k]
+        ]
+
+    # ---------- 主入口 ----------
+    def search(self, query: str, top_k: int = config.TOP_K) -> list[dict]:
+        """混合检索 + rerank,返回最终结果列表"""
+        if not self._corpus:
+            self._load_corpus()
+        if not self._corpus:
+            return []
+        vec = self._vec_search(query, config.VEC_TOP_K)
+        bm = self._bm25_search(query, config.BM25_TOP_K)
+        fused = self._rrf_fuse(vec, bm)
+        if config.RERANK_TOP > 0 and fused:
+            return self._rerank(query, fused[:config.RERANK_TOP], top_k)
+        # 无 rerank 时:按融合分返回
+        return [
+            {"text": self._corpus[i]["text"], "start": self._corpus[i]["start"],
+             "end": self._corpus[i]["end"], "source": self._corpus[i]["source"],
+             "title": self._corpus[i]["title"], "score": 0.0}
+            for i in fused[:top_k]
+        ]
+
+// 文件: app/ui.py  共 51 行
+"""Gradio 交互界面:上传音频入库 + 自然语言问答(带引用时间戳)"""
+import gradio as gr
+
+from . import config
+
+===== 第 15 页 =====
+多模态会议内容转化与向量知识库软件 V1.0  源程序
+from .ingest import ingest
+from .query import answer
+
+
+def do_ingest(audio_path, title, date):
+    if not audio_path:
+        return "请先上传音频文件"
+    n = ingest(audio_path, title or "会议", date or "")
+    return f"✅ 入库完成:{n} 个知识块。现在可以提问了。"
+
+
+def do_answer(question, history):
+    # gradio 历史格式 [(user, bot), ...] → 标准 chat 消息列表
+    chat_history = []
+    if history:
+        for u, b in history:
+            if u:
+                chat_history.append({"role": "user", "content": u})
+            if b:
+                chat_history.append({"role": "assistant", "content": b})
+    r = answer(question, history=chat_history)
+    citations = "\n".join(
+        f"- 📌 [{c['start']}-{c['end']}秒] {c['title']} (相关度 {c['score']})"
+        for c in r["citations"]
+    ) if r["citations"] else "- (无引用)"
+    return f"{r['answer']}\n\n**来源引用:**\n{citations}"
+
+
+with gr.Blocks(title="会议知识库 · 本地 RAG") as demo:
+    gr.Markdown("# 🎙️ 会议知识库(全本地部署)\n上传会议音频 → 自动转写入库 → 自然语言问答,答案带时间戳引用。")
+    with gr.Tab("① 导入会议"):
+        with gr.Row():
+            audio = gr.Audio(type="filepath", label="会议音频(MP3/WAV/M4A)")
+            title = gr.Textbox(label="会议标题", placeholder="如:组会-2026-08-22")
+            date = gr.Textbox(label="会议日期", placeholder="如:2026-08-22")
+        btn = gr.Button("转写入库", variant="primary")
+        out = gr.Textbox(label="结果")
+        btn.click(do_ingest, [audio, title, date], out)
+    with gr.Tab("② 智能问答"):
+        chatbot = gr.Chatbot(label="对话", height=400)
+        q = gr.Textbox(label="你的问题", placeholder="如:会议里关于向量数据库选型是怎么讨论的?")
+        q.submit(do_answer, [q, chatbot], chatbot)
+
+
+if __name__ == "__main__":
+    # 0.0.0.0:容器内 Docker 端口映射需要;本地直接运行也兼容
+    demo.launch(server_name="0.0.0.0", server_port=7860)
+
+
